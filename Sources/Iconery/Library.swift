@@ -1817,6 +1817,7 @@ final class Library {
             guard let setID, dragged != setID else { return false }
             return moveSet(dragged, into: setID)
         }
+        NSLog("ICONERYDBG handleDrop grid=%d ids=%d root=%@", Self.isGridDrag(urls) ? 1 : 0, draggingIDs?.count ?? -1, Exporter.dragRoot.path)
         guard Self.isGridDrag(urls) else { return importAndReport(urls, into: setID) }
         guard let setID, let ids = draggingIDs else { return false }
         // The drag stamped Recently Used when it began, because a drop into Finder or another

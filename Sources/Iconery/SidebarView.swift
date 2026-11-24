@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 struct SidebarView: View {
@@ -128,8 +129,8 @@ private struct SetRow: View {
             // and a click no longer selects the set.
             .itemProvider { NSItemProvider(object: Library.setDragURL(set.id) as NSURL) }
             .dropDestination(for: URL.self) { urls, _ in
-                library.handleDrop(urls, onto: set.id)
-            } isTargeted: { isTargeted = $0 }
+                NSLog("ICONERYDBG row drop %@", urls.map(\.path).description); return library.handleDrop(urls, onto: set.id)
+            } isTargeted: { NSLog("ICONERYDBG row targeted %d", $0 ? 1 : 0); isTargeted = $0 }
             .contextMenu {
                 Button("New Set Inside…") { library.beginNewSet(inside: set.id) }
                 Menu("Move To") {
