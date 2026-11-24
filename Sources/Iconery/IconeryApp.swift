@@ -61,6 +61,14 @@ struct IconeryApp: App {
                 }
                 .disabled(library.selection.isEmpty)
                 Divider()
+                Button("Copy SVG Code") {
+                    if let icon = library.selectedIcon { library.copySVGCode(icon) }
+                }
+                .keyboardShortcut("c", modifiers: [.command, .option])
+                .disabled(library.selectedIcon == nil || !keyWindow.libraryIsKey)
+                Button("Clean Up SVG Code") { library.cleanUpSVGCode(library.selection) }
+                    .disabled(!library.selectedIcons.contains { $0.kind == .svg })
+                Divider()
                 Button("Reveal in Finder") { library.revealInFinder(library.selection) }
                     .disabled(library.selection.isEmpty)
                 Divider()

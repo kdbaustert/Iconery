@@ -110,6 +110,10 @@ final class Preferences {
     // Import
     var skipsDuplicates: Bool { didSet { save(skipsDuplicates, "importSkipsDuplicates") } }
     var readsSVGTitles: Bool { didSet { save(readsSVGTitles, "importReadsSVGTitles") } }
+    /// Runs SVGO on each imported SVG and keeps what it gives back as the library's copy.
+    var optimizesImportedSVGs: Bool {
+        didSet { save(optimizesImportedSVGs, "importOptimizesSVGs") }
+    }
     /// The set loose files go into when no set is selected; nil for "Unsorted".
     var looseFilesSetID: UUID? { didSet { save(looseFilesSetID?.uuidString, "looseFilesSet") } }
 
@@ -117,6 +121,7 @@ final class Preferences {
     var keepsSetFolders: Bool { didSet { save(keepsSetFolders, "exportKeepsSetFolders") } }
     var addsFinderTags: Bool { didSet { save(addsFinderTags, "exportAddsFinderTags") } }
     var revealsExports: Bool { didSet { save(revealsExports, "revealsExports") } }
+    var optimizesCopiedSVG: Bool { didSet { save(optimizesCopiedSVG, "copyOptimizesSVG") } }
 
     // Window, restored at launch
     var sidebarItem: String? { didSet { save(sidebarItem, "sidebarItem") } }
@@ -142,10 +147,12 @@ final class Preferences {
         confirmsIconDeletion = stored("confirmIconDeletion") ?? true
         skipsDuplicates = stored("importSkipsDuplicates") ?? true
         readsSVGTitles = stored("importReadsSVGTitles") ?? true
+        optimizesImportedSVGs = stored("importOptimizesSVGs") ?? false
         looseFilesSetID = stored("looseFilesSet").flatMap(UUID.init(uuidString:))
         keepsSetFolders = stored("exportKeepsSetFolders") ?? false
         addsFinderTags = stored("exportAddsFinderTags") ?? false
         revealsExports = stored("revealsExports") ?? true
+        optimizesCopiedSVG = stored("copyOptimizesSVG") ?? false
         sidebarItem = stored("sidebarItem")
         expandedSetIDs = stored("expandedSets") ?? []
     }

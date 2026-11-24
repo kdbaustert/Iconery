@@ -70,7 +70,13 @@ struct ExportOptions: Codable, Equatable {
     var naming = ExportNaming.iconName
     var svgCleanup = SVGCleanup()
 
-    static let pngChoices = [16, 24, 32, 48, 64, 96, 128, 256, 512, 1024]
+    /// Picked like a size, but drawn at the most the icon allows: `largestVectorSide` for an SVG
+    /// and its own pixel size for anything else, so a bitmap is never scaled up.
+    static let largest = 0
+    static let largestVectorSide = 4096
+    /// Each image set size is drawn at 1x, 2x and 3x, so they stop at 1024 and leave out Largest.
+    static let imagesetChoices = [16, 24, 32, 48, 64, 96, 128, 256, 512, 1024]
+    static let pngChoices = imagesetChoices + [2048, largestVectorSide, largest]
     /// An ICO entry stores each side in one byte, so 256 is the largest size the format holds.
     static let icoChoices = [16, 24, 32, 48, 64, 128, 256]
     /// The sizes ICNS has slots for; see ICNSEncoder.
@@ -83,6 +89,7 @@ struct ExportOptions: Codable, Equatable {
             case .ico: icoSizes
             case .icns: icnsSizes
             case .svg, .original: []
+            case .imageset: pngSizes.filter(Self.imagesetChoices.contains)
             default: pngSizes
             }
         }
@@ -101,6 +108,7 @@ struct ExportOptions: Codable, Equatable {
         case .ico: Self.icoChoices
         case .icns: Self.icnsChoices
         case .svg, .original: []
+        case .imageset: Self.imagesetChoices
         default: Self.pngChoices
         }
     }
@@ -340,8 +348,25 @@ struct SVGCleanup: Codable, Equatable {
     var removesComments = false
     var removesDeclaration = false
     var compresses = false
+    /// Runs SVGO first, then the options above on what it gives back.
+    var optimizes = false
 
-    var changesAnything: Bool { removesSize || removesComments || removesDeclaration || compresses }
+    var changesAnything: Bool {
+        removesSize || removesComments || removesDeclaration || compresses || optimizes
+    }
+}
+
+extension SVGCleanup {
+    /// Settings saved before `optimizes` existed lack its key, and still load.
+    init(from decoder: Decoder) throws {
+        let saved = try decoder.container(keyedBy: CodingKeys.self)
+        removesSize = try saved.decodeIfPresent(Bool.self, forKey: .removesSize) ?? false
+        removesComments = try saved.decodeIfPresent(Bool.self, forKey: .removesComments) ?? false
+        removesDeclaration = try saved.decodeIfPresent(Bool.self, forKey: .removesDeclaration)
+            ?? false
+        compresses = try saved.decodeIfPresent(Bool.self, forKey: .compresses) ?? false
+        optimizes = try saved.decodeIfPresent(Bool.self, forKey: .optimizes) ?? false
+    }
 }
 
 /// Edits SVG text in place rather than parsing and re-serialising it, so everything not asked for
@@ -496,11 +521,14 @@ enum Exporter {
         case .imageset:
             // An SVG keeps its vector representation in one universal set; sizes don't apply.
             if icon.kind == .svg { return ["\(base).imageset"] }
-            let named = options.includeSize || options.pngSizes.count > 1
-            return options.pngSizes.map { named ? "\(base)-\($0).imageset" : "\(base).imageset" }
+            let named = options.includeSize || options.sizes.count > 1
+            return options.sizes.map { named ? "\(base)-\($0).imageset" : "\(base).imageset" }
         default:
             let named = options.includeSize || options.pngSizes.count > 1
-            return options.pngSizes.map { named ? "\(base)-\($0).\(ext)" : "\(base).\(ext)" }
+            return options.pngSizes.map { size in
+                let label = size == ExportOptions.largest ? "largest" : "\(size)"
+                return named ? "\(base)-\(label).\(ext)" : "\(base).\(ext)"
+            }
         }
     }
 
@@ -511,12 +539,8 @@ enum Exporter {
         let format = options.format
         if format == .svg || format == .original {
             var data = try Data(contentsOf: source)
-            // Only UTF-8 text is cleaned: decoding Latin-1 or UTF-16 bytes as UTF-8 and
-            // re-encoding what comes out corrupts them, so such a file goes out as it is.
-            if format == .svg, icon.kind == .svg, options.svgCleanup.changesAnything,
-               let text = String(data: data, encoding: .utf8) {
-                let cleaned = SVGCleaner.clean(text, options.svgCleanup)
-                data = Data(cleaned.utf8)
+            if format == .svg, icon.kind == .svg {
+                data = try cleanedSVG(data, options.svgCleanup)
             }
             return [ExportFile(name: names[0], data: data)]
         }
@@ -530,17 +554,20 @@ enum Exporter {
         }
         guard !sizes.isEmpty else { throw Failure.noSizes }
         guard let image else { throw Failure.unreadable(icon.name) }
+        let sides = sizes.map {
+            $0 == ExportOptions.largest ? largestSide(of: image, kind: icon.kind) : $0
+        }
 
         switch format {
         case .ico, .icns:
-            let entries = try sizes.map { pixels in
+            let entries = try sides.map { pixels in
                 let drawn = try drawn(image, pixels: pixels, options: options, name: icon.name)
                 return (pixels: pixels, png: try encoded(drawn, as: .png, options, icon.name))
             }
             let data = format == .ico ? ICOEncoder.encode(entries) : ICNSEncoder.encode(entries)
             return [ExportFile(name: names[0], data: data)]
         case .pdf:
-            return try zip(names, sizes).map { name, side in
+            return try zip(names, sides).map { name, side in
                 guard let data = Raster.pdf(image, side: side) else {
                     throw Failure.unreadable(icon.name)
                 }
@@ -548,7 +575,7 @@ enum Exporter {
             }
         default:
             let type = format.imageType ?? .png
-            return try zip(names, sizes).map { name, pixels in
+            return try zip(names, sides).map { name, pixels in
                 let drawn = try drawn(image, pixels: pixels, options: options, name: icon.name)
                 let data = try encoded(drawn, as: type, options, icon.name)
                 return ExportFile(name: name, data: data)
@@ -574,12 +601,7 @@ enum Exporter {
         }
         let names = fileNames(for: icon, options: options)
         if icon.kind == .svg {
-            var data = try Data(contentsOf: source)
-            // Cleaned only when the bytes are UTF-8, as the SVG export path is.
-            if options.svgCleanup.changesAnything,
-               let text = String(data: data, encoding: .utf8) {
-                data = Data(SVGCleaner.clean(text, options.svgCleanup).utf8)
-            }
+            let data = try cleanedSVG(Data(contentsOf: source), options.svgCleanup)
             let stem = (names[0] as NSString).deletingPathExtension
             return [
                 ExportFile(name: "\(names[0])/Contents.json", data: try contents(
@@ -588,9 +610,9 @@ enum Exporter {
                 ExportFile(name: "\(names[0])/\(stem).svg", data: data),
             ]
         }
-        guard !options.pngSizes.isEmpty else { throw Failure.noSizes }
+        guard !options.sizes.isEmpty else { throw Failure.noSizes }
         guard let image else { throw Failure.unreadable(icon.name) }
-        return try zip(names, options.pngSizes).flatMap { folder, base -> [ExportFile] in
+        return try zip(names, options.sizes).flatMap { folder, base -> [ExportFile] in
             let stem = (folder as NSString).deletingPathExtension
             var images: [[String: String]] = []
             var files: [ExportFile] = []
@@ -905,6 +927,24 @@ enum Exporter {
         while cleaned.hasPrefix(".") { cleaned.removeFirst() }
         while cleaned.utf8.count > 200 { cleaned.removeLast() }
         return cleaned.isEmpty ? "icon" : cleaned
+    }
+
+    /// An SVG file as the export settings leave it. Only UTF-8 text is cleaned: decoding Latin-1
+    /// or UTF-16 bytes as UTF-8 and re-encoding what comes out corrupts them, so such a file goes
+    /// out as it is.
+    private static func cleanedSVG(_ data: Data, _ cleanup: SVGCleanup) throws -> Data {
+        guard cleanup.changesAnything, var text = String(data: data, encoding: .utf8) else {
+            return data
+        }
+        if cleanup.optimizes { text = try SVGO.optimize(text) }
+        return Data(SVGCleaner.clean(text, cleanup).utf8)
+    }
+
+    /// The side ExportOptions.largest draws at. A bitmap's is the longer side of its biggest
+    /// representation, as the inspector's dimensions read it.
+    static func largestSide(of image: NSImage, kind: IconKind) -> Int {
+        guard kind != .svg else { return ExportOptions.largestVectorSide }
+        return image.representations.map { max($0.pixelsWide, $0.pixelsHigh) }.max() ?? 0
     }
 
     /// `image` at `pixels` a side, with the fill and background applied.

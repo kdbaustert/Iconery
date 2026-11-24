@@ -356,8 +356,11 @@ private struct IconMenu: View {
         }
         Divider()
         Button("Copy") { library.copyToPasteboard(targets) }
-        if targets.count == 1, icon.kind == .svg {
+        if targets.count == 1 {
             Button("Copy SVG Code") { library.copySVGCode(icon) }
+        }
+        if library.icons.contains(where: { targets.contains($0.id) && $0.kind == .svg }) {
+            Button("Clean Up SVG Code") { library.cleanUpSVGCode(targets) }
         }
         Button("Reveal in Finder") { library.revealInFinder(targets) }
         Divider()

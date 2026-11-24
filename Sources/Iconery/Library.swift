@@ -65,6 +65,7 @@ final class Library {
 
     /// Confirms an import that needed no alert, a move or a delete. The grid shows it and clears it.
     var toast: Toast?
+    var copiedCode: CopiedCode?
 
     @ObservationIgnored private var anchor: UUID?
     /// The keyboard caret: the moving end of a ⇧-arrow range, where the anchor is the fixed one.
@@ -1863,7 +1864,20 @@ final class Library {
             try FileManager.default.createDirectory(
                 at: iconsFolder, withIntermediateDirectories: true
             )
-            try FileManager.default.copyItem(at: url, to: fileURL(for: icon))
+            if kind == .svg, preferences.optimizesImportedSVGs,
+               let optimized = optimizedSVG(at: url) {
+                try optimized.write(to: fileURL(for: icon), options: .withoutOverwriting)
+                // The library holds the optimized copy, which the original's bytes no longer
+                // match, so this is the check that finds it already imported that way.
+                if duplicates?.contains(fileURL(for: icon)) == true {
+                    try? FileManager.default.removeItem(at: fileURL(for: icon))
+                    report.duplicates += 1
+                    return
+                }
+                duplicates?.insert(fileURL(for: icon))
+            } else {
+                try FileManager.default.copyItem(at: url, to: fileURL(for: icon))
+            }
             icons.append(icon)
             duplicates?.insert(url)
             report.imported += 1
@@ -2625,6 +2639,13 @@ final class Library {
         return written.map { NSItemProvider(contentsOf: $0) ?? NSItemProvider() }
     }
 
+    /// The SVG at `url` through SVGO, or nil when SVGO can't read it. Such a file is imported as
+    /// it is: AppKit already drew it, so it is a working icon.
+    private func optimizedSVG(at url: URL) -> Data? {
+        guard let text = (try? Data(contentsOf: url)).flatMap(Self.svgText) else { return nil }
+        return (try? SVGO.optimize(text)).map { Data($0.utf8) }
+    }
+
     /// SVG source as text: UTF-8, or UTF-16 with or without a byte order mark. Editors on
     /// Windows save the latter, and AppKit draws it, so reading only UTF-8 would fail on an icon
     /// that imported and shows fine. UTF-16 without a mark is also valid UTF-8, with a NUL after
@@ -2637,22 +2658,123 @@ final class Library {
         return String(data: data, encoding: littleEndian ? .utf16LittleEndian : .utf16)
     }
 
-    /// The icon's SVG source, for pasting straight into an editor or a design tool. The file as
-    /// it is, not the cleaned-up copy an SVG export can write.
+    /// The icon's SVG source, formatted one element per line, for pasting straight into an editor
+    /// or a design tool. The file's own markup, not the cleaned-up copy an SVG export can write,
+    /// unless Settings asks for SVGO; what SVGO can't read is copied as it is, and the sheet
+    /// showing the code says so when optimizing was asked for.
     func copySVGCode(_ icon: Icon) {
-        guard icon.kind == .svg, let data = try? Data(contentsOf: fileURL(for: icon)),
-              let text = Self.svgText(data)
-        else {
+        guard var text = svgCode(for: icon) else {
             notice = Notice(
                 title: "“\(icon.name)” could not be copied",
-                message: "Its file is missing from the library folder or isn't text."
+                message: "Its file is missing from the library folder or can't be read."
             )
             return
         }
+        var unoptimizedReason: String?
+        if icon.kind == .svg, preferences.optimizesCopiedSVG {
+            do {
+                text = try SVGO.optimize(text)
+            } catch {
+                unoptimizedReason = error.localizedDescription
+            }
+        }
+        if let formatted = Prettier.format(text) { text = formatted }
+        Self.copyText(text)
+        copiedCode = CopiedCode(
+            iconName: icon.name, code: text, unoptimizedReason: unoptimizedReason
+        )
+        update([icon.id]) { $0.lastUsed = .now }
+    }
+
+    static func copyText(_ text: String) {
         let board = NSPasteboard.general
         board.clearContents()
         board.setString(text, forType: .string)
-        update([icon.id]) { $0.lastUsed = .now }
+    }
+
+    /// An SVG's own text. Anything else is drawn as a PNG inside an <svg>, at its own size up to
+    /// `embeddedBitmapSide`: base64 grows it by a third, and a 1024 px app icon's code would run
+    /// to megabytes.
+    private func svgCode(for icon: Icon) -> String? {
+        guard icon.kind != .svg else {
+            return (try? Data(contentsOf: fileURL(for: icon))).flatMap(Self.svgText)
+        }
+        guard let image = image(for: icon) else { return nil }
+        let side = min(Self.embeddedBitmapSide, Exporter.largestSide(of: image, kind: icon.kind))
+        guard let png = Raster.render(image, pixels: side).flatMap({ Raster.encode($0, as: .png) })
+        else { return nil }
+        return #"<svg xmlns="http://www.w3.org/2000/svg" width="\#(side)" height="\#(side)" "#
+            + #"viewBox="0 0 \#(side) \#(side)"><image width="\#(side)" height="\#(side)" "#
+            + #"href="data:image/png;base64,\#(png.base64EncodedString())"/></svg>"#
+    }
+
+    static let embeddedBitmapSide = 512
+
+    /// The one icon selected, which Copy SVG Code works on from the menu bar and the inspector.
+    var selectedIcon: Icon? {
+        selection.count == 1 ? selectedIcons.first : nil
+    }
+
+    /// Rewrites the library's copy of each SVG among `ids` with SVGO's output, as one undo step.
+    /// A file SVGO can't read, or one it can't make smaller, is left alone.
+    func cleanUpSVGCode(_ ids: Set<UUID>) {
+        let svgs = icons.filter { ids.contains($0.id) && $0.kind == .svg }
+        var cleaned: [UUID: Data] = [:]
+        var failed: [String] = []
+        var saved = 0
+        for icon in svgs {
+            guard let data = try? Data(contentsOf: fileURL(for: icon)),
+                  let text = Self.svgText(data)
+            else {
+                failed.append(icon.name)
+                continue
+            }
+            do {
+                let optimized = Data(try SVGO.optimize(text).utf8)
+                guard optimized.count < data.count else { continue }
+                cleaned[icon.id] = optimized
+                saved += data.count - optimized.count
+            } catch {
+                failed.append(icon.name)
+            }
+        }
+        replaceFiles(with: cleaned, named: "Clean Up SVG Code")
+        if !failed.isEmpty {
+            notice = Notice(
+                title: "SVGO couldn't read \(plural(failed.count, "icon"))",
+                message: failed.prefix(10).joined(separator: ", ")
+                    + (failed.count > 10 ? ", …" : "") + ". They were left as they were."
+            )
+        }
+        guard !svgs.isEmpty, failed.count < svgs.count else { return }
+        let size = ByteCountFormatter.string(fromByteCount: Int64(saved), countStyle: .file)
+        toast = Toast(
+            text: cleaned.isEmpty
+                ? "Already as small as SVGO makes it"
+                : "Cleaned up \(plural(cleaned.count, "icon")), saving \(size)"
+        )
+    }
+
+    /// Writes each icon's file, registering the old contents as the undo. Undo and redo run
+    /// through here again, so each lands on the other stack.
+    private func replaceFiles(with contents: [UUID: Data], named name: String) {
+        var previous: [UUID: Data] = [:]
+        for icon in icons {
+            guard let data = contents[icon.id] else { continue }
+            let url = fileURL(for: icon)
+            guard let old = try? Data(contentsOf: url),
+                  (try? data.write(to: url, options: .atomic)) != nil
+            else { continue }
+            previous[icon.id] = old
+        }
+        guard !previous.isEmpty else { return }
+        images.removeAllObjects()
+        thumbnails.removeAllObjects()
+        singleColors = [:]
+        undoManager?.registerUndo(withTarget: self) { target in
+            MainActor.assumeIsolated { target.replaceFiles(with: previous, named: name) }
+        }
+        undoManager?.setActionName(name)
     }
 
     /// Shows the library's own file. Read-only in spirit: moving or editing it there changes

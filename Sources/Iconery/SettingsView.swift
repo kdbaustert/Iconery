@@ -350,6 +350,11 @@ private struct ImportSettings: View {
                         "Uses the <title> inside the file as the icon's name and its <desc> as the "
                             + "description, as IconJar does."
                     )
+                    Toggle("Optimize with SVGO", isOn: $preferences.optimizesImportedSVGs)
+                    settingsNote(
+                        "Keeps SVGO's smaller copy in the library instead of the file as it came. "
+                            + "Icon ▸ Clean Up SVG Code does the same for icons already here."
+                    )
                 }
             }
         }
@@ -416,9 +421,12 @@ private struct ExportSettings: View {
                         isOn: $library.export.svgCleanup.removesDeclaration
                     )
                     Toggle("Compress", isOn: $library.export.svgCleanup.compresses)
+                    Toggle("Optimize with SVGO", isOn: $library.export.svgCleanup.optimizes)
                     settingsNote(
                         "Applies when exporting as SVG. Original always writes the file untouched."
                     )
+                    Toggle("Optimize copied SVG code", isOn: $preferences.optimizesCopiedSVG)
+                    settingsNote("Copy SVG Code puts SVGO's output on the clipboard.")
                 }
             }
         }

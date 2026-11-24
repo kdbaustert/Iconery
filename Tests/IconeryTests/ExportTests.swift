@@ -24,6 +24,11 @@ final class ExportTests: XCTestCase {
         Library.defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         Exporter.dragRoot = folder.appending(path: "Drag", directoryHint: .isDirectory)
         Library.openRoot = folder.appending(path: "Open", directoryHint: .isDirectory)
+        // A test bundle has no copy of SVGO or Prettier; the first call loads each from here.
+        let resources = URL(filePath: #filePath).deletingLastPathComponent()
+            .appending(path: "../../Resources").standardizedFileURL
+        SVGO.script = resources.appending(path: "svgo/svgo.browser.js")
+        Prettier.script = resources.appending(path: "prettier/prettier-xml.js")
     }
 
     override func tearDownWithError() throws {
@@ -2483,7 +2488,7 @@ final class ExportTests: XCTestCase {
         NSPasteboard.general.clearContents()
         library.copySVGCode(icon)
         XCTAssertNil(library.notice?.message)
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), svg)
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), Prettier.format(svg))
     }
 
     /// Copy always writes to the general pasteboard, so a test that clears it first puts back
@@ -2518,7 +2523,7 @@ final class ExportTests: XCTestCase {
         defer { restore() }
         library.copySVGCode(icon)
         XCTAssertNil(library.notice?.message)
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), svg)
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), Prettier.format(svg))
     }
 
     @MainActor
@@ -3507,5 +3512,210 @@ final class ExportTests: XCTestCase {
     func testOpenInTreatsMissingAppsAsUnusable() {
         XCTAssertTrue(Library.isUsableApp(URL(filePath: "/System/Applications/Calculator.app")))
         XCTAssertFalse(Library.isUsableApp(folder.appending(path: "Gone.app")))
+    }
+
+    // MARK: - Export resolution and SVGO (2026-11-24)
+
+    /// The root element is never closed, so SVGO rejects it.
+    private let unclosedSVG = #"<svg xmlns="http://www.w3.org/2000/svg"><path d="M1 1h4"/>"#
+
+    @MainActor
+    func testLargestDrawsAtTheMostTheIconAllows() throws {
+        var options = ExportOptions()
+        options.pngSizes = [16, ExportOptions.largest]
+        let (svgIcon, svgSource) = try makeSVGIcon()
+        let vector = try Exporter.files(
+            for: svgIcon, source: svgSource, image: NSImage(contentsOf: svgSource),
+            options: options
+        )
+        XCTAssertEqual(vector.map(\.name), ["home-16.png", "home-largest.png"])
+        XCTAssertEqual(NSBitmapImageRep(data: vector[1].data)?.pixelsWide, 4096)
+
+        let pngSource = try writePNG("photo")
+        let pngIcon = Icon(name: "photo", setID: UUID(), kind: .png)
+        let bitmap = try Exporter.files(
+            for: pngIcon, source: pngSource, image: NSImage(contentsOf: pngSource),
+            options: options
+        )
+        XCTAssertEqual(bitmap.map(\.name), ["photo-16.png", "photo-largest.png"])
+        XCTAssertEqual(NSBitmapImageRep(data: bitmap[1].data)?.pixelsWide, 32,
+                       "a bitmap stays at its own size rather than being scaled up")
+    }
+
+    func testImagesetLeavesOutSizesTooBigForThreeScales() {
+        let icon = Icon(name: "home", setID: UUID(), kind: .svg)
+        var options = ExportOptions()
+        options.format = .imageset
+        options.pngSizes = [32]
+        let one = Exporter.fileNames(for: icon, options: options)
+        options.pngSizes = [32, 2048, ExportOptions.largest]
+        XCTAssertEqual(options.sizes, [32])
+        XCTAssertEqual(Exporter.fileNames(for: icon, options: options), one)
+        XCTAssertFalse(options.sizeChoices.contains(ExportOptions.largest))
+    }
+
+    func testSVGCleanupSavedBeforeSVGOStillLoads() throws {
+        let saved = #"{"removesSize":true,"removesComments":false,"#
+            + #""removesDeclaration":false,"compresses":true}"#
+        let cleanup = try JSONDecoder().decode(SVGCleanup.self, from: Data(saved.utf8))
+        XCTAssertEqual(cleanup, SVGCleanup(removesSize: true, compresses: true))
+    }
+
+    @MainActor
+    func testSVGExportCanRunSVGO() throws {
+        let source = try writeSVG("home", #"<!-- drawn by hand --><path d="M3 10l9-7 9 7"/>"#)
+        let icon = Icon(name: "home", setID: UUID(), kind: .svg)
+        var options = ExportOptions()
+        options.format = .svg
+        options.svgCleanup.optimizes = true
+        let files = try Exporter.files(
+            for: icon, source: source, image: NSImage(contentsOf: source), options: options
+        )
+        let exported = String(decoding: files[0].data, as: UTF8.self)
+        let original = try String(contentsOf: source, encoding: .utf8)
+        XCTAssertEqual(exported, try SVGO.optimize(original))
+        XCTAssertFalse(exported.contains("drawn by hand"))
+        XCTAssertTrue(exported.contains(#"viewBox="0 0 24 24""#), "SVGO 4 keeps the viewBox")
+    }
+
+    @MainActor
+    func testCopySVGCodeCanOptimize() throws {
+        let library = Library(
+            folder: folder.appending(path: "Library"),
+            preferences: preferences { $0.optimizesCopiedSVG = true }
+        )
+        library.importItems([try writeSVG("note", #"<!-- note --><path d="M1 1h4"/>"#)], into: nil)
+        let icon = try XCTUnwrap(library.icons.first)
+        let file = try String(contentsOf: library.fileURL(for: icon), encoding: .utf8)
+        let restore = savedGeneralPasteboard()
+        defer { restore() }
+        library.copySVGCode(icon)
+        XCTAssertNil(library.notice)
+        let optimized = try XCTUnwrap(Prettier.format(try SVGO.optimize(file)))
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), optimized)
+        XCTAssertEqual(library.copiedCode?.code, optimized, "the sheet shows what was copied")
+        XCTAssertNil(library.copiedCode?.unoptimizedReason)
+
+        try Data(unclosedSVG.utf8).write(to: library.fileURL(for: icon))
+        library.copySVGCode(icon)
+        XCTAssertNil(library.notice, "the sheet says so instead of an alert on top of it")
+        XCTAssertTrue(try XCTUnwrap(library.copiedCode?.unoptimizedReason).hasPrefix("SVGO"))
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), unclosedSVG,
+                       "what SVGO can't read is still copied")
+    }
+
+    @MainActor
+    func testCopySVGCodeEmbedsABitmapAtItsOwnSize() throws {
+        let library = Library(folder: folder.appending(path: "Library"), preferences: preferences())
+        library.importItems([try writePNG("photo")], into: nil)
+        let icon = try XCTUnwrap(library.icons.first)
+        let restore = savedGeneralPasteboard()
+        defer { restore() }
+        library.copySVGCode(icon)
+        XCTAssertNil(library.notice)
+        let code = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
+        XCTAssertTrue(code.hasPrefix(#"<svg xmlns="http://www.w3.org/2000/svg" width="32""#))
+        let prefix = "data:image/png;base64,"
+        let start = try XCTUnwrap(code.range(of: prefix)).upperBound
+        let base64 = code[start...].prefix { $0 != "\"" }
+        let png = try XCTUnwrap(Data(base64Encoded: String(base64)))
+        XCTAssertEqual(NSBitmapImageRep(data: png)?.pixelsWide, 32, "not scaled up to 512")
+    }
+
+    func testPrettierLaysOutSVGWithoutChangingIt() {
+        let path = #"<path d="M1 1h4M2 2h5M3 3h6M4 4h7M5 5h8M6 6h9M7 7h10M8 8h11" fill="none" stroke="red" "#
+            + #"stroke-width="2"/>"#
+        let svg = #"<svg xmlns="http://www.w3.org/2000/svg"><!-- note --><g id="a">"#
+            + path + "</g></svg>"
+        XCTAssertEqual(Prettier.format(svg), """
+            <svg xmlns="http://www.w3.org/2000/svg">
+              <!-- note -->
+              <g id="a">
+                <path
+                  d="M1 1h4M2 2h5M3 3h6M4 4h7M5 5h8M6 6h9M7 7h10M8 8h11"
+                  fill="none"
+                  stroke="red"
+                  stroke-width="2"
+                />
+              </g>
+            </svg>
+
+            """)
+        XCTAssertNil(Prettier.format(unclosedSVG), "what it can't read is left to the caller")
+    }
+
+    @MainActor
+    func testSVGHighlighterColoursEachPartOfATag() {
+        let code = #"<!-- a<b --><svg viewBox="0 0 24 24"><path d='M1>1'/>x=y</svg>"#
+        let coloured = SVGHighlighter.highlight(code)
+        func colour(of piece: String) -> NSColor? {
+            let at = (code as NSString).range(of: piece).location
+            return coloured.attribute(.foregroundColor, at: at, effectiveRange: nil) as? NSColor
+        }
+        XCTAssertEqual(colour(of: "a<b"), SVGHighlighter.comment, "a < in a comment isn't a tag")
+        XCTAssertEqual(colour(of: "svg "), SVGHighlighter.element)
+        XCTAssertEqual(colour(of: "viewBox"), SVGHighlighter.attribute)
+        XCTAssertEqual(colour(of: #""0 0"#), SVGHighlighter.value)
+        XCTAssertEqual(colour(of: "1'/>"), SVGHighlighter.value, "a > in a value doesn't end the tag")
+        XCTAssertEqual(colour(of: "/>"), SVGHighlighter.plain)
+        XCTAssertEqual(colour(of: "x=y"), SVGHighlighter.plain, "text between tags isn't an attribute")
+        XCTAssertEqual(colour(of: "</svg"), SVGHighlighter.plain)
+    }
+
+    @MainActor
+    func testImportCanOptimizeAndStillFindsDuplicates() throws {
+        let library = Library(
+            folder: folder.appending(path: "Library"),
+            preferences: preferences { $0.optimizesImportedSVGs = true }
+        )
+        let source = try writeSVG("note", #"<!-- note --><path d="M1 1h4"/>"#)
+        library.importItems([source], into: nil)
+        let icon = try XCTUnwrap(library.icons.first)
+        let original = try String(contentsOf: source, encoding: .utf8)
+        XCTAssertEqual(
+            try String(contentsOf: library.fileURL(for: icon), encoding: .utf8),
+            try SVGO.optimize(original)
+        )
+        XCTAssertEqual(library.importItems([source], into: nil).duplicates, 1,
+                       "the same file again matches the optimized copy")
+        XCTAssertEqual(library.icons.count, 1)
+    }
+
+    @MainActor
+    func testCleanUpSVGCodeRewritesFilesAsOneUndoStep() throws {
+        let library = Library(folder: folder.appending(path: "Library"), preferences: preferences())
+        library.importItems([try writeSVG("note", #"<!-- note --><path d="M1 1h4"/>"#)], into: nil)
+        let icon = try XCTUnwrap(library.icons.first)
+        let url = library.fileURL(for: icon)
+        let original = try String(contentsOf: url, encoding: .utf8)
+        let optimized = try SVGO.optimize(original)
+        let undo = manualUndo(for: library)
+
+        act(undo) { library.cleanUpSVGCode([icon.id]) }
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), optimized)
+        XCTAssertEqual(undo.undoActionName, "Clean Up SVG Code")
+        XCTAssertTrue(try XCTUnwrap(library.toast?.text).hasPrefix("Cleaned up 1 icon, saving "))
+        undo.undo()
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), original)
+        undo.redo()
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), optimized)
+
+        act(undo) { library.cleanUpSVGCode([icon.id]) }
+        XCTAssertEqual(library.toast?.text, "Already as small as SVGO makes it")
+    }
+
+    @MainActor
+    func testCleanUpSVGCodeLeavesWhatSVGOCannotRead() throws {
+        let library = Library(folder: folder.appending(path: "Library"), preferences: preferences())
+        library.importItems([try writeSVG("note", #"<path d="M1 1h4"/>"#)], into: nil)
+        let icon = try XCTUnwrap(library.icons.first)
+        try Data(unclosedSVG.utf8).write(to: library.fileURL(for: icon))
+        library.toast = nil
+        library.cleanUpSVGCode([icon.id])
+        XCTAssertEqual(
+            try String(contentsOf: library.fileURL(for: icon), encoding: .utf8), unclosedSVG
+        )
+        XCTAssertEqual(library.notice?.title, "SVGO couldn't read 1 icon")
+        XCTAssertNil(library.toast)
     }
 }

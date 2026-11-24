@@ -61,6 +61,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: isPresent(\.check)) { CheckResultsView() }
         .sheet(isPresented: $library.batchRenaming) { BatchRenameSheet() }
+        .sheet(isPresented: isPresent(\.copiedCode)) { CopiedCodeSheet() }
         .alert(
             library.notice?.title ?? "", isPresented: isPresent(\.notice),
             presenting: library.notice
@@ -211,6 +212,120 @@ private struct BatchRenameSheet: View {
             guard let raw, !raw.isEmpty else { return (icon.id, icon.name, icon.name) }
             return (icon.id, icon.name, raw)
         }
+    }
+}
+
+/// The code Copy SVG Code just put on the clipboard, read-only, so what's shown is what pastes.
+private struct CopiedCodeSheet: View {
+    @Environment(Library.self) private var library
+
+    var body: some View {
+        let copied = library.copiedCode
+        VStack(alignment: .leading, spacing: 12) {
+            Text("“\(copied?.iconName ?? "")” SVG Code")
+                .font(.title3.bold())
+            Text(copied?.unoptimizedReason.map { "Copied without optimizing. \($0)" }
+                 ?? "Copied to the clipboard.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            CodeView(text: copied?.code ?? "")
+                .overlay { RoundedRectangle(cornerRadius: 4).strokeBorder(.separator) }
+            HStack {
+                Spacer()
+                Button("Copy") { Library.copyText(copied?.code ?? "") }
+                Button("Done") { library.copiedCode = nil }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 640, height: 480)
+    }
+}
+
+/// An NSTextView rather than Text: a bitmap's code is one line holding hundreds of kilobytes of
+/// base64, and NSTextView lays out only what's on screen.
+private struct CodeView: NSViewRepresentable {
+    let text: String
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSTextView.scrollableTextView()
+        if let textView = scrollView.documentView as? NSTextView {
+            textView.isEditable = false
+            textView.font = SVGHighlighter.font
+            textView.backgroundColor = SVGHighlighter.background
+            textView.selectedTextAttributes = [.backgroundColor: SVGHighlighter.selection]
+            textView.textContainerInset = NSSize(width: 6, height: 6)
+        }
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? NSTextView, textView.string != text
+        else { return }
+        textView.textStorage?.setAttributedString(SVGHighlighter.highlight(text))
+    }
+}
+
+/// Colours SVG the way VS Code's Monokai colours XML, on its editor background in light mode
+/// too, since the colours are made for it. Brackets and "=" have no colour of their own there,
+/// so they stay plain. Regular expressions, not a parser, so code SVGO couldn't read still gets
+/// coloured as far as it can.
+@MainActor
+enum SVGHighlighter {
+    static let font = NSFont.monospacedSystemFont(
+        ofSize: NSFont.smallSystemFontSize, weight: .regular
+    )
+    static let background = rgb(0x272822)
+    static let selection = rgb(0x878B91, alpha: 0x80)
+    static let plain = rgb(0xF8F8F2)
+    static let comment = rgb(0x88846F)
+    static let element = rgb(0xF92672)
+    static let attribute = rgb(0xA6E22E)
+    static let value = rgb(0xE6DB74)
+
+    // Comments and CDATA come first in the alternation so a "<" inside one isn't read as a tag.
+    // A tag skips over quoted values, so a ">" inside one doesn't end it.
+    private static let token = regex(
+        #"<!--[\s\S]*?(?:-->|$)|<!\[CDATA\[[\s\S]*?(?:\]\]>|$)|<(?:"[^"]*"|'[^']*'|[^'">])*>?"#
+    )
+    private static let elementName = regex(#"^<[?!/]?([\w:.-]+)"#)
+    private static let attributeValue = regex(#"([\w:.-]+)\s*=\s*("[^"]*"?|'[^']*'?)"#)
+
+    static func highlight(_ code: String) -> NSAttributedString {
+        let result = NSMutableAttributedString(
+            string: code, attributes: [.font: font, .foregroundColor: plain]
+        )
+        let all = NSRange(location: 0, length: result.length)
+        for match in token.matches(in: code, range: all) {
+            let tag = match.range
+            let opening = code.utf16.dropFirst(tag.location)
+            if opening.starts(with: "<!--".utf16) {
+                result.addAttribute(.foregroundColor, value: comment, range: tag)
+                continue
+            }
+            // CDATA holds text, often a style sheet, whose "a=b" isn't an attribute.
+            if opening.starts(with: "<![CDATA[".utf16) { continue }
+            if let name = elementName.firstMatch(in: code, options: .anchored, range: tag) {
+                result.addAttribute(.foregroundColor, value: element, range: name.range(at: 1))
+            }
+            for pair in attributeValue.matches(in: code, range: tag) {
+                result.addAttribute(.foregroundColor, value: attribute, range: pair.range(at: 1))
+                result.addAttribute(.foregroundColor, value: value, range: pair.range(at: 2))
+            }
+        }
+        return result
+    }
+
+    private static func rgb(_ hex: Int, alpha: Int = 0xFF) -> NSColor {
+        NSColor(
+            srgbRed: CGFloat(hex >> 16 & 0xFF) / 255, green: CGFloat(hex >> 8 & 0xFF) / 255,
+            blue: CGFloat(hex & 0xFF) / 255, alpha: CGFloat(alpha) / 255
+        )
+    }
+
+    private static func regex(_ pattern: String) -> NSRegularExpression {
+        // The patterns are literals above, so a bad one is a programmer error caught at launch.
+        try! NSRegularExpression(pattern: pattern)
     }
 }
 

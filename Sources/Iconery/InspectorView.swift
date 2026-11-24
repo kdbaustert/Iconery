@@ -36,6 +36,17 @@ struct InspectorView: View {
                     )
                     QuickDragWell(icon: icon)
                     ExportButton(icons: selected)
+                    if let single = library.selectedIcon {
+                        Button { library.copySVGCode(single) } label: {
+                            Label(
+                                "Copy SVG Code",
+                                systemImage: "chevron.left.forwardslash.chevron.right"
+                            )
+                            .frame(maxWidth: .infinity)
+                        }
+                        .controlSize(.large)
+                        .help("Puts the SVG markup on the clipboard (⌥⌘C)")
+                    }
                     Divider().padding(.vertical, 2)
                     DetailsFields(icon: icon)
                         .id(icon.id)
@@ -156,7 +167,7 @@ private struct ExportBar: View {
         HStack(spacing: 6) {
             Menu {
                 ForEach(options.sizeChoices.filter(Self.quickSizes.contains), id: \.self) { size in
-                    Button("\(size)s") { library.export.sizes = [size] }
+                    Button(Self.sizeTitle(size)) { library.export.sizes = [size] }
                 }
                 Divider()
                 Button("Sizes…") { picksSizes = true }
@@ -193,12 +204,17 @@ private struct ExportBar: View {
     }
 
     /// The sizes the menu offers directly, as IconJar's does; "Sizes…" has the rest.
-    private static let quickSizes: Set = [16, 32, 64, 128, 256, 512]
+    private static let quickSizes: Set = [16, 32, 64, 128, 256, 512, ExportOptions.largest]
 
     /// "32s" for one size, IconJar's shorthand for 32 × 32, or a count for several.
     static func sizeLabel(_ options: ExportOptions) -> String {
         if options.sizeChoices.isEmpty { return "Own size" }
-        return options.sizes.count == 1 ? "\(options.sizes[0])s" : "\(options.sizes.count) sizes"
+        let sizes = options.sizes
+        return sizes.count == 1 ? sizeTitle(sizes[0]) : "\(sizes.count) sizes"
+    }
+
+    private static func sizeTitle(_ pixels: Int) -> String {
+        pixels == ExportOptions.largest ? "Largest" : "\(pixels)s"
     }
 }
 
@@ -223,7 +239,9 @@ private struct SizesPopover: View {
         switch library.export.format {
         case .ico: "One .ico per icon, holding every size picked."
         case .icns: "One .icns per icon, holding every size picked. 1024 is the 512 @2x slot."
-        default: "One file per size."
+        case .imageset: "One image set per size, each at 1x, 2x and 3x."
+        default: "One file per size. Largest is \(ExportOptions.largestVectorSide) for an SVG "
+            + "and the icon's own pixel size for anything else."
         }
     }
 }
@@ -864,12 +882,21 @@ private struct SizeGrid: View {
 
     var body: some View {
         let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 5)
-        LazyVGrid(columns: columns, spacing: 6) {
-            ForEach(choices, id: \.self) { pixels in
-                Toggle(isOn: isOn(pixels)) {
-                    Text("\(pixels)")
-                        .monospacedDigit()
-                        .frame(maxWidth: .infinity)
+        VStack(spacing: 6) {
+            LazyVGrid(columns: columns, spacing: 6) {
+                ForEach(choices.filter { $0 != ExportOptions.largest }, id: \.self) { pixels in
+                    Toggle(isOn: isOn(pixels)) {
+                        Text("\(pixels)")
+                            .monospacedDigit()
+                            .frame(maxWidth: .infinity)
+                    }
+                    .toggleStyle(.button)
+                }
+            }
+            // Too wide for a grid cell, so it gets the row to itself.
+            if choices.contains(ExportOptions.largest) {
+                Toggle(isOn: isOn(ExportOptions.largest)) {
+                    Text("Largest").frame(maxWidth: .infinity)
                 }
                 .toggleStyle(.button)
             }

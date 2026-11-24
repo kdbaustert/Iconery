@@ -233,6 +233,14 @@ struct Notice {
     var message: String
 }
 
+/// What Copy SVG Code put on the clipboard, shown in a sheet so it can be read before pasting.
+struct CopiedCode {
+    var iconName: String
+    var code: String
+    /// Why the code isn't SVGO's when Settings asked for it, or nil.
+    var unoptimizedReason: String?
+}
+
 /// A passing message that fades on its own. The id lets the same text shown twice in a row
 /// restart its timer.
 struct Toast: Equatable {

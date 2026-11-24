@@ -30,6 +30,13 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Iconery"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
+# SVGO's browser build, which SVGO.swift runs in JavaScriptCore, and its MIT license.
+cp Resources/svgo/svgo.browser.js "$APP/Contents/Resources/"
+cp Resources/svgo/LICENSE "$APP/Contents/Resources/svgo-LICENSE"
+# Prettier and its XML plugin, bundled by esbuild, which Prettier.swift runs to lay out copied
+# SVG code, and the licenses of everything in the bundle.
+cp Resources/prettier/prettier-xml.js "$APP/Contents/Resources/"
+cp Resources/prettier/LICENSE "$APP/Contents/Resources/prettier-LICENSE"
 
 # The icon, compiled as Xcode does it: Assets.car, read through CFBundleIconName, plus AppIcon.icns
 # for anything older. The catalog's PNGs come from Resources/Icon/make-icon.sh.
