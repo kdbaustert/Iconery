@@ -8,7 +8,9 @@ An icon library for macOS, in the spirit of IconJar. Keeps your icons in sets, f
 and exports them in the format and sizes a project needs. It can also bring over an existing
 IconJar library. Runs on macOS 14 and later.
 
-There are no release builds yet; see [Contributing](#contributing) to build it.
+Download the latest build from [Releases](https://github.com/kdbaustert/Iconery/releases/latest).
+It needs Apple Silicon, and since it isn't notarized, macOS asks you to allow it once in System
+Settings ▸ Privacy & Security. To build it yourself, see [Contributing](#contributing).
 
 <p align="center">
   <img src="docs/screenshots/main-window.png" alt="Iconery's main window, with an icon selected and its export options in the sidebar" width="800">
