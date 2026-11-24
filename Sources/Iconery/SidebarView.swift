@@ -127,8 +127,12 @@ private struct SetRow: View {
             // itemProvider rides the List's own row drag; .draggable claims the mouse-down
             // and a click no longer selects the set.
             .itemProvider { NSItemProvider(object: Library.setDragURL(set.id) as NSURL) }
-            .dropDestination(for: URL.self) { urls, _ in
-                library.handleDrop(urls, onto: set.id)
+            // SwiftUI hands this an empty list for an icon dragged from the grid: it can't load
+            // the file URL from that drag's item provider. The drag pasteboard has it, so the
+            // URLs come from there, as the grid's drop outline reads them.
+            .dropDestination(for: URL.self) { _, _ in
+                let urls = NSPasteboard(name: .drag).readObjects(forClasses: [NSURL.self]) as? [URL]
+                return library.handleDrop(urls ?? [], onto: set.id)
             } isTargeted: { isTargeted = $0 }
             .contextMenu {
                 Button("New Set Inside…") { library.beginNewSet(inside: set.id) }
