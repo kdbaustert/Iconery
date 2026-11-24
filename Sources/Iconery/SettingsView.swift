@@ -178,6 +178,8 @@ private struct LibrarySettings: View {
     @Environment(Library.self) private var library
     /// Shown here rather than on the main window, which may be behind Settings.
     @State private var notice: Notice?
+    /// Back Up Now's progress panel, on this window for the same reason.
+    @State private var showsBackupProgress = false
 
     var body: some View {
         @Bindable var preferences = library.preferences
@@ -243,6 +245,7 @@ private struct LibrarySettings: View {
                 }
             }
         }
+        .sheet(isPresented: $showsBackupProgress) { BackupProgressSheet() }
         .alert(
             notice?.title ?? "",
             isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } }),
@@ -284,11 +287,15 @@ private struct LibrarySettings: View {
     }
 
     private func backUpNow() {
+        showsBackupProgress = true
         Task {
+            defer { showsBackupProgress = false }
             do {
                 let backup = try await library.backUp(into: library.backupFolder)
                 NSWorkspace.shared.activateFileViewerSelecting([backup])
+            } catch is CancellationError {
             } catch {
+                showsBackupProgress = false
                 notice = Notice(
                     title: "The backup could not be written", message: error.localizedDescription
                 )

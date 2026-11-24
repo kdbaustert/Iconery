@@ -139,6 +139,12 @@ final class Library {
     /// Where Export writes without asking; nil asks each time.
     private(set) var exportFolder: URL?
     private(set) var isBackingUp = false
+    /// The backup ditto is writing, or nil before it starts and once it ends.
+    private(set) var backupProgress: BackupProgress?
+    /// File ▸ Back Up Library Now's progress panel. Scheduled backups run without one.
+    var showsBackupProgress = false
+    @ObservationIgnored private var backupProcess: Process?
+    @ObservationIgnored private var backupCancelled = false
     var isBackupFolderMissing: Bool { backupFolderMissing }
     @ObservationIgnored private var duplicates: DuplicateFinder?
 
@@ -2217,11 +2223,15 @@ final class Library {
 
     /// File ▸ Back Up Library Now. Settings calls `backUp(into:)` and shows its own errors.
     func backUpNow() {
+        showsBackupProgress = true
         Task {
+            defer { showsBackupProgress = false }
             do {
                 let url = try await backUp(into: backupFolder)
                 NSWorkspace.shared.activateFileViewerSelecting([url])
+            } catch is CancellationError {
             } catch {
+                showsBackupProgress = false
                 notice = Notice(
                     title: "The backup could not be written", message: error.localizedDescription
                 )
@@ -2291,9 +2301,10 @@ final class Library {
     /// Zips the library folder exactly as it sits on disk (the index plus every icon file), so
     /// sets, nesting, tags and stars all survive and a restore is a straight swap back. `ditto`
     /// because it ships with macOS and Foundation has no zip writer. It runs while the window
-    /// stays responsive: a library of large ICNS files takes a while to zip.
+    /// stays responsive, and `cancelBackup()` can stop it. Throws CancellationError when it did.
     func writeBackup(to url: URL, snapshotsIn parent: URL? = nil) async throws {
         save()  // the index on disk now matches what the window shows
+        backupCancelled = false
         // The window staying responsive also means an import or delete can land mid-zip, and
         // ditto would archive half of each. So ditto reads a snapshot: copyItem clones on
         // APFS, and nothing else runs on this actor until the copy returns, so the snapshot
@@ -2323,6 +2334,7 @@ final class Library {
         // Registered before the copy: one that fails part way leaves a half-made snapshot.
         defer { try? FileManager.default.removeItem(at: snapshotRoot) }
         try FileManager.default.copyItem(at: folder, to: snapshot)
+        let total = Self.byteCount(of: snapshot)
         // ditto's complaints go to a file rather than a pipe, which a long one could fill and
         // stall.
         let log = FileManager.default.temporaryDirectory
@@ -2336,11 +2348,31 @@ final class Library {
         let process = Process()
         process.executableURL = URL(filePath: "/usr/bin/ditto")
         // --keepParent puts the folder itself at the top of the archive, not its contents loose.
+        // No compression: ICNS and PNG files are compressed already. On a 902 MB library of
+        // mostly ICNS, deflate took 15.3 s to make a 903 MB zip, and storing took 1.3 s for 944 MB
+        // (measured 2026-11-24).
         process.arguments = [
-            "-c", "-k", "--sequesterRsrc", "--keepParent",
+            "-c", "-k", "--zlibCompressionLevel", "0", "--sequesterRsrc", "--keepParent",
             snapshot.path(percentEncoded: false), partial.path(percentEncoded: false),
         ]
         process.standardError = try FileHandle(forWritingTo: log)
+        backupProcess = process
+        backupProgress = BackupProgress(total: total)
+        defer {
+            backupProcess = nil
+            backupProgress = nil
+        }
+        // ditto reports no progress, so the zip's size stands in for it.
+        let watcher = Task {
+            while !Task.isCancelled {
+                let size = try? FileManager.default.attributesOfItem(
+                    atPath: partial.path(percentEncoded: false)
+                )[.size] as? Int64
+                backupProgress?.written = size ?? 0
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        defer { watcher.cancel() }
         let status = try await withCheckedThrowingContinuation {
             (continuation: CheckedContinuation<Int32, Error>) in
             process.terminationHandler = { continuation.resume(returning: $0.terminationStatus) }
@@ -2351,12 +2383,33 @@ final class Library {
             }
         }
         guard status == 0 else {
+            if backupCancelled { throw CancellationError() }
             let message = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
             throw Problem(
                 errorDescription: message.isEmpty ? "ditto stopped with status \(status)." : message
             )
         }
         try FileManager.default.moveItem(at: partial, to: url)
+    }
+
+    /// Stops the zip ditto is writing; `writeBackup` then removes it and throws
+    /// CancellationError. Before ditto starts, and after it ends, there is nothing to stop.
+    func cancelBackup() {
+        backupCancelled = true
+        backupProcess?.terminate()
+    }
+
+    /// The bytes in the files under `folder`. Synchronous because a directory enumerator can't
+    /// be iterated from async code.
+    private nonisolated static func byteCount(of folder: URL) -> Int64 {
+        let files = FileManager.default.enumerator(
+            at: folder, includingPropertiesForKeys: [.fileSizeKey]
+        )
+        var total: Int64 = 0
+        while let file = files?.nextObject() as? URL {
+            total += Int64((try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        }
+        return total
     }
 
     /// Moves backups in `folder` past the newest `keep` to the Trash, where they can still be

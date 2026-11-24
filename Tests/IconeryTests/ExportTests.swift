@@ -1363,6 +1363,35 @@ final class ExportTests: XCTestCase {
     }
 
     @MainActor
+    func testACancelledBackupLeavesNoPartOfAZip() async throws {
+        let (_, source) = try makeSVGIcon()
+        let library = Library(folder: folder.appending(path: "Library"), preferences: preferences())
+        library.importItems([source], into: nil)
+        // Big enough that ditto is still writing when the cancel lands.
+        let filler = 50_000_000
+        try Data(count: filler).write(to: library.iconsFolder.appending(path: "filler.bin"))
+        let backups = folder.appending(path: "Backups")
+        try FileManager.default.createDirectory(at: backups, withIntermediateDirectories: true)
+
+        let backup = Task {
+            try await library.writeBackup(to: backups.appending(path: "Iconery Backup x.zip"))
+        }
+        while library.backupProgress == nil { await Task.yield() }
+        XCTAssertGreaterThan(library.backupProgress?.total ?? 0, Int64(filler),
+                             "the total counts every file in the library")
+        library.cancelBackup()
+        do {
+            try await backup.value
+            XCTFail("the backup was cancelled")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "a cancel isn't reported as a failure: \(error)")
+        }
+        XCTAssertNil(library.backupProgress)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: backups.path()), [],
+                       "nothing is left for pruning to count as a backup")
+    }
+
+    @MainActor
     func testAnUnreadableLibraryIsNeverSavedOver() throws {
         let (_, source) = try makeSVGIcon()
         let libraryFolder = folder.appending(path: "Library")

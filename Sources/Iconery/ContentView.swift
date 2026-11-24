@@ -62,6 +62,7 @@ struct ContentView: View {
         .sheet(isPresented: isPresent(\.check)) { CheckResultsView() }
         .sheet(isPresented: $library.batchRenaming) { BatchRenameSheet() }
         .sheet(isPresented: isPresent(\.copiedCode)) { CopiedCodeSheet() }
+        .sheet(isPresented: $library.showsBackupProgress) { BackupProgressSheet() }
         .alert(
             library.notice?.title ?? "", isPresented: isPresent(\.notice),
             presenting: library.notice
@@ -212,6 +213,42 @@ private struct BatchRenameSheet: View {
             guard let raw, !raw.isEmpty else { return (icon.id, icon.name, icon.name) }
             return (icon.id, icon.name, raw)
         }
+    }
+}
+
+/// A backup being written, with a way to stop it. Before ditto starts the library is being
+/// snapshotted, which reports nothing, so the bar runs without a value.
+struct BackupProgressSheet: View {
+    @Environment(Library.self) private var library
+
+    var body: some View {
+        let progress = library.backupProgress
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Backing Up Library")
+                .font(.title3.bold())
+            if let progress {
+                ProgressView(value: progress.fraction)
+                Text("\(progress.written.formatted(.byteCount(style: .file))) of "
+                     + "\(progress.total.formatted(.byteCount(style: .file)))")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            } else {
+                ProgressView().progressViewStyle(.linear)
+                Text("Preparing…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { library.cancelBackup() }
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(progress == nil)
+            }
+        }
+        .padding(20)
+        .frame(width: 360)
+        .interactiveDismissDisabled()
     }
 }
 

@@ -241,6 +241,15 @@ struct CopiedCode {
     var unoptimizedReason: String?
 }
 
+/// How much of the zip a backup has written. With no compression the zip comes out a little
+/// over the library's size, so `fraction` is capped rather than trusted to stop at 1.
+struct BackupProgress: Equatable {
+    var written: Int64 = 0
+    var total: Int64
+
+    var fraction: Double { total > 0 ? min(1, Double(written) / Double(total)) : 0 }
+}
+
 /// A passing message that fades on its own. The id lets the same text shown twice in a row
 /// restart its timer.
 struct Toast: Equatable {
