@@ -111,5 +111,22 @@
 	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<!-- Sparkle. The feed is on GitHub Pages, from the gh-pages branch release.sh pushes to.
+	     build.sh strips it from every build that isn't a release, so a local build never updates
+	     itself. -->
+	<key>SUFeedURL</key>
+	<string>https://kdbaustert.github.io/Iconery/appcast.xml</string>
+	<!-- Iconery's own EdDSA key, not Cmd-Tab's. The private half is in the login keychain under the
+	     account "Iconery"; Sparkle refuses any download it didn't sign. -->
+	<key>SUPublicEDKey</key>
+	<string>OReE2FjlA5YI7rOu374/8hKhBchhcBL+1fjD+V9wPx0=</string>
+	<!-- Checks daily without asking first; installing waits for a yes unless turned on in
+	     Settings. -->
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
 </dict>
 </plist>

@@ -12,6 +12,8 @@ struct IconeryApp: App {
         let library = Library()
         _library = State(initialValue: library)
         appDelegate.library = library
+        // Built now rather than when Settings first opens, so the daily check runs.
+        _ = Updater.shared
     }
 
     var body: some Scene {
@@ -25,6 +27,10 @@ struct IconeryApp: App {
                 .environment(library)
         }
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { Updater.shared.checkForUpdates() }
+                    .disabled(!Updater.shared.canCheck)
+            }
             CommandGroup(replacing: .newItem) {
                 Button("New Set") { library.beginNewSet() }
                     .keyboardShortcut("n")

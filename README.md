@@ -66,7 +66,10 @@ There are no release builds yet; see [Contributing](#contributing) to build it.
 ### Settings
 
 - General: appearance (follow macOS, or always Light or Dark), grid sorting and names, what search
-  looks at, how many icons Recently Used keeps, and whether deleting asks first.
+  looks at, how many icons Recently Used keeps, whether deleting asks first, and updates.
+- Updates come through Sparkle: a daily check, or Iconery ▸ Check for Updates. Installing waits
+  for you unless you turn on automatic installs, and every download is checked against Iconery's
+  signing key first.
 - Library: move the library to any folder or switch to another, found again even after the folder
   is renamed or moved in Finder. Back up the whole library to a dated `.iconerybackup` file, in
   iCloud Drive by default, by hand or daily or weekly, keeping as many as you choose. To restore,
@@ -89,8 +92,10 @@ may ask once for access to that folder.
 
 ## Privacy
 
-No telemetry, analytics, crash reporting, or account. Iconery makes no network requests of its own;
-the only time it opens the web is when you click a license's link.
+No telemetry, analytics, crash reporting, or account. The one network request Iconery makes is the
+daily update check, which reads `appcast.xml` from GitHub Pages. It sends Iconery's version and
+nothing about you or your library; turn it off in Settings ▸ General. Otherwise it only opens the
+web when you click a license's link.
 
 ## Contributing
 
@@ -100,10 +105,12 @@ Issues and pull requests are welcome. To build and test:
 ./build.sh --install         # builds build/Iconery.app, copies it to /Applications, launches it
 swift test                   # the test suite
 Resources/Icon/make-icon.sh  # re-renders the app icon after Resources/Icon/Iconery.svg changes
+./release.sh NOTES.md        # publishes the version in Info.plist, and the update feed
 ```
 
 Building needs Xcode, for its asset catalog compiler. `build.sh` signs with a local certificate
-when it finds one and ad-hoc otherwise; set `CODESIGN_IDENTITY` to choose. Re-rendering the icon
-needs Google Chrome, because it is the renderer that keeps the artwork's shadows and transparency.
+when it finds one and ad-hoc otherwise; set `CODESIGN_IDENTITY` to choose. It leaves out the update
+feed, so a copy you build never replaces itself with a release. Re-rendering the icon needs Google
+Chrome, because it is the renderer that keeps the artwork's shadows and transparency.
 
 Built by [@kdbaustert](https://github.com/kdbaustert).

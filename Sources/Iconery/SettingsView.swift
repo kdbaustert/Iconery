@@ -84,6 +84,7 @@ private struct GeneralSettings: View {
     @Environment(Library.self) private var library
     @AppStorage(Appearance.key) private var appearance = Appearance.system
     @AppStorage(Appearance.improveContrastKey) private var improveContrast = true
+    @Bindable private var updater = Updater.shared
 
     var body: some View {
         @Bindable var preferences = library.preferences
@@ -147,8 +148,40 @@ private struct GeneralSettings: View {
                 settingsLabel("Deleting")
                 Toggle("Ask before deleting icons", isOn: $preferences.confirmsIconDeletion)
             }
+            Divider()
+            GridRow {
+                settingsLabel("Updates")
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle("Check for updates automatically", isOn: $updater.checksAutomatically)
+                    Toggle(
+                        "Download and install updates automatically",
+                        isOn: $updater.installsAutomatically
+                    )
+                    .disabled(!updater.checksAutomatically)
+                    HStack {
+                        Button("Check Now") { updater.checkForUpdates() }
+                            .disabled(!updater.canCheck)
+                        Text(lastCheckDescription)
+                            .foregroundStyle(.secondary)
+                    }
+                    settingsNote(
+                        Updater.isConfigured
+                            ? "Iconery looks for a new version once a day. Every download is "
+                                + "checked against Iconery's signing key before it's installed."
+                            : "This copy was built with build.sh, so it doesn't update itself. "
+                                + "Release builds do."
+                    )
+                }
+                .disabled(!Updater.isConfigured)
+            }
         }
         .onChange(of: appearance) { appearance.apply() }
+    }
+
+    private var lastCheckDescription: String {
+        guard let date = updater.lastCheck else { return "Never checked" }
+        let relative = date.formatted(.relative(presentation: .named))
+        return "Last checked \(relative)"
     }
 
     private func choice(_ title: String, _ option: Appearance) -> some View {

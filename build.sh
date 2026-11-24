@@ -4,6 +4,7 @@
 # Environment:
 #   CODESIGN_IDENTITY  signing identity, or - for ad-hoc; "Cmd-Tab Local" when unset, ad-hoc when
 #                      that is absent. One named here that is absent fails the build.
+#   ICONERY_RELEASE    1 keeps the update feed in Info.plist; release.sh sets it.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -54,6 +55,31 @@ if [[ ! -f "$APP/Contents/Resources/Assets.car" ]]; then
     exit 1
 fi
 
+# Sparkle. SwiftPM links it as @rpath/Sparkle.framework but leaves it under .build, so without this
+# the app launches and dies on dyld's "Library not loaded". cp -R keeps the framework's Versions
+# symlinks, which its signature covers.
+echo "==> Embedding Sparkle"
+SPARKLE_FW="$(find .build/artifacts -path '*/Sparkle.xcframework/macos-*/Sparkle.framework' \
+    -type d -print -quit)"
+if [[ -z "$SPARKLE_FW" ]]; then
+    echo "==> ERROR: Sparkle.framework not found; run 'swift package resolve'" >&2
+    exit 1
+fi
+mkdir -p "$APP/Contents/Frameworks"
+cp -R "$SPARKLE_FW" "$APP/Contents/Frameworks/"
+# No `grep -q`, for the same SIGPIPE reason as the identity check below.
+if ! otool -l "$APP/Contents/MacOS/Iconery" | grep -F '@executable_path/../Frameworks' >/dev/null
+then
+    install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/Iconery"
+fi
+
+# Only release.sh sets ICONERY_RELEASE=1. Any other build would find the published version newer
+# than the working tree and offer to replace what you're testing with it. Not plain RELEASE: this
+# Mac's tool environment already exports RELEASE=1, which kept the feed in every build.
+if [[ "${ICONERY_RELEASE:-0}" != 1 ]]; then
+    /usr/libexec/PlistBuddy -c "Delete :SUFeedURL" "$APP/Contents/Info.plist"
+fi
+
 # A library or backup folder in Documents or iCloud Drive makes macOS ask for access, and it keys
 # that grant to the app's designated requirement. A stable certificate keeps the requirement the
 # same build to build; ad-hoc ties it to the code hash, so every rebuild would ask again. Cmd-Tab's
@@ -73,8 +99,18 @@ if [[ "$IDENTITY" != "-" ]] \
     IDENTITY="-"
 fi
 echo "==> Signing as \"$IDENTITY\""
+# Inside out, in the order Sparkle's documentation gives: each seal covers the ones inside it, so
+# signing a part after its container breaks the container's signature. Downloader keeps its
+# entitlements, which re-signing would otherwise drop.
+SPARKLE="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
+codesign --force --sign "$IDENTITY" "$SPARKLE/XPCServices/Installer.xpc"
+codesign --force --sign "$IDENTITY" --preserve-metadata=entitlements \
+    "$SPARKLE/XPCServices/Downloader.xpc"
+codesign --force --sign "$IDENTITY" "$SPARKLE/Autoupdate"
+codesign --force --sign "$IDENTITY" "$SPARKLE/Updater.app"
+codesign --force --sign "$IDENTITY" "$APP/Contents/Frameworks/Sparkle.framework"
 codesign --force --sign "$IDENTITY" "$APP"
-codesign --verify --strict "$APP"
+codesign --verify --deep --strict "$APP"
 
 echo "==> Built $APP"
 
