@@ -1,0 +1,29 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Iconery</title>
+        <item>
+            <title>0.1.0</title>
+            <pubDate>Tue, 24 Nov 2026 12:19:06 -0500</pubDate>
+            <sparkle:version>1</sparkle:version>
+            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[The first release of Iconery, an icon library for macOS. It keeps your icons in sets, finds them
+again, and exports them in the formats and sizes a project needs. It can also bring over an
+existing IconJar library.
+
+Needs macOS 14 or later on Apple Silicon.
+
+## Installing
+
+1. Unzip `Iconery-0.1.0.zip` and drag Iconery into Applications.
+2. Iconery isn't notarized, so macOS blocks it the first time. Open it once, then go to System
+   Settings ▸ Privacy & Security and click Open Anyway.
+
+From here on Iconery checks for updates once a day. You can turn that off in Settings ▸ General.
+]]></description>
+            <enclosure url="https://github.com/kdbaustert/Iconery/releases/download/v0.1.0/Iconery-0.1.0.zip" length="2962843" type="application/octet-stream" sparkle:edSignature="58ytRvIeAh5xbdqs0PME5fJ31FCHU0WEaRdIHu4oIlNzn6Cc6x+qUYdfHWdS1rmWqEGJbcsDStWrDwAgeMsCAQ=="/>
+        </item>
+    </channel>
+</rss>
